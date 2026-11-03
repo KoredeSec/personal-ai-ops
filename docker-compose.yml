@@ -1,0 +1,32 @@
+services:
+  bot:
+    build: .
+    image: personal-ai-ops:latest
+    container_name: personal-ai-ops
+    restart: unless-stopped
+    # Run as the host user that owns ./data (override with APP_UID/APP_GID in .env).
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite:////app/data/app.db
+    volumes:
+      - ./data:/app/data
+    # Hardening: no root, no extra privileges, immutable filesystem.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "python", "-c", "from app.database.session import check_database; check_database()"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
