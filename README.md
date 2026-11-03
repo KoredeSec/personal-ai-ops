@@ -7,6 +7,12 @@ A self-hosted personal operations platform with two agents behind one private Te
 
 Built in Python with Gemini (`google-genai`), python-telegram-bot, SQLAlchemy/Alembic and SQLite (PostgreSQL-ready). It needs no paid services.
 
+The goal isn't to *do more* — it's to take decisions off my plate (what to work on, what's slipping, what's worth reading) without quietly generating more work than it absorbs. The reasoning behind every feature lives in **[ENGINEERING_NOTES.md](ENGINEERING_NOTES.md)**, a running build log.
+
+### How the two agents relate
+
+**I assign research; the Chief of Staff never launches it on its own.** The two agents share a bot and a database but don't dispatch work to each other. Research happens when I ask for it (`/research`, a URL, a source list) or on a schedule I opted into (daily briefing, weekly digest, deadline watch). The most the Chief of Staff does is *suggest* in a briefing ("three of your tasks touch cloud security — want me to track advisories?") and wait for a yes. Agents prepare, surface and recommend; spending quota, contacting people or committing my time always waits for a human yes. The [engineering notes](ENGINEERING_NOTES.md) explain why.
+
 ## Status
 
 | Milestone | Scope | State |
