@@ -182,3 +182,13 @@ Review the generated file, then run:
 ```bash
 alembic upgrade head
 ```
+
+## Contributing and security
+
+This is a personal project shared so others can learn from it and adapt it. Issues and ideas are welcome. Please report security problems privately, as described in [SECURITY.md](SECURITY.md).
+
+Every push runs [CI](.github/workflows/ci.yml): the offline test suite, a check that migrations apply cleanly, a dependency CVE audit, a secrets scan across the full git history, and a Docker build that confirms the image runs as non-root.
+
+## Licence
+
+[MIT](LICENSE) © 2026 KoredeSec

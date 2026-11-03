@@ -1,0 +1,17 @@
+# Secrets scanning config. Uses gitleaks' full default ruleset, plus an
+# allowlist for the deliberately fake credentials the tests rely on to prove
+# that real ones are redacted. Keep this allowlist narrow: values, not files.
+title = "personal-ai-ops"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake credentials used by the test suite"
+paths = ['''^tests/.*\.py$''']
+regexes = [
+  '''123456789:TEST_TOKEN_a+''',
+  '''987654321:FAKE[A-Z0-9]+''',
+  '''AIzaTEST_KEY_b+''',
+  '''AIzaFAKEKEY[A-Z0-9]+''',
+]

@@ -103,6 +103,49 @@ down here first.
 
 ---
 
+## 2026-11-03 — Getting ready to build in public
+
+Before the repo goes public, a few things that are easy now and painful later.
+
+**Commit email.** My early commits used my personal email, which a public repo
+would expose to anyone who clones it. I'm rewriting the history to GitHub's
+no-reply address while it's three commits long and has never been pushed.
+Rewriting history after people have cloned it is the painful version of this.
+
+**CI before visitors.** People judge a public project by whether the checks are
+green, so CI goes in before the repo is public, not after. On every push it runs
+the offline test suite, applies the migrations to a fresh database and confirms
+the models match them, audits the pinned dependencies for known CVEs, scans the
+*entire* git history for secrets, and builds the Docker image and confirms it
+doesn't run as root.
+
+The secrets scan had a small irony to solve. My tests are full of fake bot tokens
+and API keys, because the test that proves real ones get redacted needs
+something that looks real. A scanner would flag every one of them. The fix is an
+allowlist, and I kept it deliberately narrow: it matches those exact fake
+patterns inside test files only, not "ignore the tests folder". If a real key
+ever ends up in a test by accident, it still gets caught.
+
+I also wanted the scanner pinned to an exact version and run from its official
+image, rather than whatever a third-party action happens to fetch that day.
+Supply chain matters more for a tool whose whole job is to touch my credentials.
+
+**MIT licence**, so anyone can take this and adapt it, which was the point of
+sharing it. And a `SECURITY.md` that says to report problems privately rather
+than in a public issue, with a scope list that's really just a summary of the
+promises this system makes: the allowlist holds, secrets don't leak, fetched
+content can't steer the agents, and nothing external happens without my yes.
+
+**Where off-machine backups should go: still open.** Nightly backups exist, but
+they sit on the same disk as the data, so one dead disk takes both. My current
+leaning is to encrypt each backup on the machine and push it to a separate
+private GitHub repo, using a key that can only write to that one repo. GitHub
+would only ever hold ciphertext, and the decryption key would never live on the
+server. It costs nothing and needs no new account. I'm deciding properly once
+Milestone 2 is storing data that's actually worth protecting.
+
+---
+
 ## 2026-11-03 — Milestone 1.1: making it trustworthy before making it bigger
 
 I finished the Milestone 1 foundation, then ran a design critique over it before
