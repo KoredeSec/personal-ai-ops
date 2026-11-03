@@ -308,6 +308,8 @@ class ResearchSource(TimestampMixin, Base):
     # HTTP caching headers to avoid re-downloading unchanged feeds.
     etag: Mapped[str | None] = mapped_column(String(500))
     last_modified: Mapped[str | None] = mapped_column(String(200))
+    # sha256 of extracted page text, for change detection on watched webpages.
+    content_hash: Mapped[str | None] = mapped_column(String(64))
 
     articles: Mapped[list[ResearchArticle]] = relationship(back_populates="source")
 
@@ -342,6 +344,10 @@ class ResearchArticle(TimestampMixin, Base):
     processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     model_used: Mapped[str | None] = mapped_column(String(100))
     submitted_manually: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # The content contained text that looked like instructions aimed at an AI.
+    injection_flag: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Owner feedback: 1 useful, -1 not relevant, None no feedback.
+    feedback: Mapped[int | None] = mapped_column(Integer)
 
     source: Mapped[ResearchSource | None] = relationship(back_populates="articles")
 
@@ -368,6 +374,9 @@ class Opportunity(TimestampMixin, Base):
     )
     # Which fields are verified vs assumed, e.g. {"funding_info": "verified"}.
     field_verification: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
+    # field -> verbatim quote from the page that supports it. A field without
+    # a quote that appears on the page is never stored.
+    evidence: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
     verification_notes: Mapped[str | None] = mapped_column(Text)
     discovered_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utcnow, nullable=False)
     application_status: Mapped[ApplicationStatus] = mapped_column(

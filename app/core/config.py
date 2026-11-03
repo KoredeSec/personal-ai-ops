@@ -74,9 +74,18 @@ class Settings(BaseSettings):
     gemini_max_prompt_chars: int = Field(default=30_000, ge=1_000)
     llm_cache_ttl_hours: int = Field(default=24, ge=0)
 
-    # --- External content fetching (Milestone 3) -------------------------
+    # --- External content fetching & research ----------------------------
     fetch_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     fetch_max_bytes: int = Field(default=2_000_000, ge=10_000)
+    # Articles sent to Gemini per processing run, and per Lagos day (quota guard).
+    research_process_batch: int = Field(default=5, ge=1, le=50)
+    research_max_analyses_per_day: int = Field(default=30, ge=0, le=500)
+    # Minimum model relevance (0-10) for an article to appear in briefings/digests.
+    research_min_relevance: int = Field(default=6, ge=0, le=10)
+    # Ignore feed entries older than this (stops a new feed flooding the queue).
+    research_max_age_days: int = Field(default=14, ge=1, le=365)
+    # A source is switched off after this many consecutive fetch failures.
+    research_max_source_failures: int = Field(default=5, ge=1, le=50)
 
     @field_validator("telegram_allowed_user_ids", mode="before")
     @classmethod

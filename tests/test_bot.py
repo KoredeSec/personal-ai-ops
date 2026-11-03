@@ -124,7 +124,7 @@ async def test_help_ping_status(bot):
     help_text, ping_text, status_text = fake.sent_texts()
     assert "/status" in help_text
     assert ping_text.startswith("pong")
-    assert "✅ OK – Database" in status_text and "0003_decision_events" in status_text
+    assert "✅ OK – Database" in status_text and "0004_research_fields" in status_text
     assert "Milestone" not in help_text
     assert "AIza" not in status_text and "TEST_TOKEN" not in status_text  # no secrets
 

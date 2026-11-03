@@ -6,3 +6,5 @@ alembic==1.20.1                          # schema migrations
 pydantic-settings==2.16.2                # typed env configuration with secret types
 httpx==0.28.1                            # HTTP client (already used by both SDKs above)
 tzdata==2026.6                           # IANA tz database for zoneinfo in slim containers
+feedparser==6.0.14                       # RSS/Atom parsing; fed bytes only (we fetch, it never does)
+feedparser-sgmllib==2.1.0                # feedparser's HTML sanitiser dependency

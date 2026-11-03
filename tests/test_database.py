@@ -24,7 +24,7 @@ def test_migration_creates_all_tables(db):
     tables = set(inspect(build_engine(db)).get_table_names())
     assert EXPECTED_TABLES <= tables
     current, head = schema_status(db)
-    assert current == head == "0003_decision_events"
+    assert current == head == "0004_research_fields"
 
 
 def test_migrations_match_models_exactly(db):
