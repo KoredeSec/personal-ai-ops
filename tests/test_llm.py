@@ -14,6 +14,7 @@ from app.core.llm import (
     LLMError,
     LLMNotConfiguredError,
     LLMQuotaExceededError,
+    LLMRateLimitedError,
     LLMRequest,
     LLMResponseError,
     LLMResult,
@@ -59,14 +60,25 @@ class FakeBackend:
         return LLMResult(text=item, model=req.model, prompt_tokens=5, output_tokens=2, total_tokens=7)
 
 
-def mk(backend, store=None, **overrides):
+class FakeClock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+def mk(backend, store=None, clock=None, **overrides):
     s = Settings(_env_file=None, **overrides)
     sleeps = []
+    clock = clock or FakeClock()
 
     async def fake_sleep(d):
         sleeps.append(d)
+        clock.t += d  # simulated time passes during backoff
 
-    client = GeminiClient(s, store=store if store is not None else MemoryStore(), backend=backend, sleep=fake_sleep)
+    client = GeminiClient(s, store=store if store is not None else MemoryStore(), backend=backend,
+                          sleep=fake_sleep, clock=clock)
     return client, sleeps
 
 
@@ -251,3 +263,48 @@ async def test_invalid_api_key_maps_to_auth_error_without_retry():
     with pytest.raises(LLMAuthError) as ei:
         await c.generate("hi")
     assert sleeps == [] and "GEMINI_API_KEY" in ei.value.user_message
+
+
+async def test_interactive_deadline_stops_rate_limit_retries_early():
+    details = [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "15s"}]
+    be = FakeBackend(*[api_error(429, "RESOURCE_EXHAUSTED", details)] * 5)
+    c, sleeps = mk(be, gemini_max_retries=4)
+    with pytest.raises(LLMRateLimitedError) as ei:
+        await c.generate("hi", deadline_seconds=20)
+    # one 15s wait fits in 20s, a second would not
+    assert len(sleeps) == 1 and len(be.requests) == 2
+    assert "minute" in ei.value.user_message
+
+
+async def test_interactive_deadline_on_outage_maps_to_unavailable():
+    be = FakeBackend(*[api_error(503, "UNAVAILABLE")] * 10)
+    c, sleeps = mk(be, gemini_max_retries=8)
+    with pytest.raises(LLMUnavailableError):
+        await c.generate("hi", deadline_seconds=5)
+    assert sum(sleeps) < 5
+
+
+async def test_background_calls_use_full_retry_policy():
+    be = FakeBackend(*[api_error(503, "UNAVAILABLE")] * 4, "ok")
+    c, sleeps = mk(be, gemini_max_retries=4)
+    assert (await c.generate("hi")).text == "ok" and len(sleeps) == 4
+
+
+async def test_deadline_caps_per_attempt_timeout():
+    async def hang(_req):
+        await asyncio.sleep(10)
+
+    clock = FakeClock()
+    c, _ = mk(hang, clock=clock, gemini_max_retries=0)
+    clock_start = asyncio.get_running_loop().time()
+    with pytest.raises(LLMUnavailableError):
+        await c.generate("hi", deadline_seconds=0.05)
+    assert asyncio.get_running_loop().time() - clock_start < 1
+
+
+def test_cache_key_includes_max_output_tokens():
+    from app.core.llm import LLMRequest
+
+    a = GeminiClient._cache_key(LLMRequest("m", "p", None, 0.3, 100))
+    b = GeminiClient._cache_key(LLMRequest("m", "p", None, 0.3, 4000))
+    assert a != b

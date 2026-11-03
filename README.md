@@ -12,6 +12,7 @@ Built in Python with Gemini (`google-genai`), python-telegram-bot, SQLAlchemy/Al
 | Milestone | Scope | State |
 |---|---|---|
 | 1 | Structure, config, database + migrations, Gemini client, Telegram bot core, Docker | **Done** (offline tests pass; live Telegram not yet verified, see below) |
+| 1.1 | Responsiveness, crash-safe delivery, backups, watchdog, alerts | **Done** |
 | 2 | Chief of Staff: tasks, reminders, follow-ups, briefings, memory, NL routing | Next |
 | 3 | Research agent: RSS ingestion, article processing, opportunities, digests | Planned |
 | 4 | Integration tests, security review, deployment, backup/restore, docs | Planned |
@@ -47,8 +48,8 @@ python -m app.main
 ```
 
 Then, in Telegram:
-- `/start` should reply "Initialised" with the current Lagos time.
-- `/status` should show ✅ Database, ✅ Schema 0001_initial, ✅ Gemini key, and the `housekeeping` job.
+- `/start` should reply "Ready" with the current Lagos time.
+- `/status` should start with "All systems OK" once the first heartbeat and the first nightly backup exist. Run `python -m scripts.backup_db` to create a backup straight away.
 - `/aitest` makes one small Gemini call and shows the model, tokens and latency.
 - A message from any other Telegram account gets **no reply**, and an `access_denied` row is written to `audit_logs`.
 
@@ -81,7 +82,10 @@ Key decisions:
 - **Modular monolith, no agent framework.** Agents are plain Python modules. Deterministic work (CRUD, date maths, listing, scheduling) never calls the LLM. Gemini is used only for language understanding, summarisation and classification.
 - **One Gemini abstraction** (`app/core/llm.py`) handles timeouts and exponential backoff. It retries per-minute rate limits but fails fast when the daily quota is exhausted. It also enforces a local daily request budget and a prompt size cap, validates structured JSON with Pydantic, provides an opt-in response cache, logs usage per call to `agent_execution_logs`, and gives clear user-facing failure messages.
 - **Times are stored in UTC and displayed in Africa/Lagos.** A custom column type rejects naive datetimes, so local/UTC mix-ups fail loudly.
-- **Durable scheduling.** Reminders and digests live in the database, and periodic jobs dispatch them. Restarts lose nothing, and `notification_log.dedupe_key` (unique) prevents duplicate sends.
+- **Durable scheduling.** Reminders and digests live in the database, and periodic jobs dispatch them, so a restart loses nothing.
+- **Crash-safe delivery** (`app/services/notifications.py`). Every proactive message is claimed, sent, then marked in `notification_log`, keyed by a stable ID such as `reminder:42`. Repeated or overlapping runs never send twice. A crashed send is reclaimed after a lease (5 min) instead of being lost. The only possible duplicate is a crash in the milliseconds between Telegram accepting a message and the database recording it. That trade-off is deliberate: a rare duplicate is better than a missed reminder.
+- **Responsiveness.** Updates are processed concurrently, so a slow AI call never blocks `/tasks`. Interactive AI calls have a total time limit of 20s, retries included (`GEMINI_INTERACTIVE_DEADLINE_SECONDS`), and show "typing…" while they run. Background jobs use the full retry policy.
+- **Data ownership.** Chief of Staff data (tasks, reminders, follow-ups, memory) is per user. Research sources, articles and opportunities are global, which suits a single-owner system.
 - **Migrations only.** The schema is created by Alembic and never by `create_all`. A test fails if the models drift from the migrations. The app refuses to start on an out-of-date schema.
 - **Sync SQLAlchemy.** For a single user, SQLite queries take well under a millisecond. To move to PostgreSQL, change `DATABASE_URL` and add the `psycopg` driver.
 
@@ -94,6 +98,52 @@ Key decisions:
 - **Untrusted content.** External content is fenced with `wrap_untrusted()`: spoofed fence tags and invisible characters are stripped, the text is truncated, and a standing system policy tells the model never to follow instructions inside it. Injection heuristics are flagged for audit.
 - **SSRF.** `validate_public_url()` allows only http/https on standard ports with no URL credentials. Every resolved IP must be public, which blocks loopback, RFC1918, link-local/cloud metadata, CGNAT, IPv6 ULA and IPv4-mapped tricks. The Milestone 3 fetcher re-validates every redirect hop.
 - **No autonomous external actions.** The system never sends emails, messages or applications. Anything outward-facing needs explicit approval through a confirmation button.
+
+## Operations
+
+**Backups.** A backup runs every night at 02:30 Lagos time (`BACKUP_TIME_LOCAL`). It uses SQLite's online backup API, which is safe while the bot runs. Each backup is integrity-checked, written with mode 600 to `data/backups/`, and only the newest `BACKUP_RETENTION_COUNT` (14) are kept. If a backup fails, you get a Telegram alert.
+
+```bash
+python -m scripts.backup_db
+```
+
+```bash
+python -m scripts.backup_db --list
+```
+
+To restore, stop the bot first. The current database is saved aside before it is replaced:
+
+```bash
+docker compose stop
+```
+
+```bash
+python -m scripts.backup_db --restore data/backups/app-<stamp>.db
+```
+
+```bash
+docker compose start
+```
+
+Backups sit on the same disk as the database. Copy `data/backups/` somewhere else regularly.
+
+**Liveness.** A job writes `data/heartbeat` every 60s. A watchdog thread exits the process if the heartbeat is older than 5 minutes, and Docker then restarts it. Docker does not restart containers that are merely *unhealthy*, so the watchdog is what actually recovers a hung bot. `scripts/healthcheck.py` reports the same signal in `docker ps`.
+
+**Alerts.** If a background job fails, you get one Telegram message per job per day. Details stay in the server logs.
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| Exit code 2 at startup | Missing or invalid config. The log names the variable. `InvalidToken` means re-copy the token from @BotFather. |
+| Exit code 3 at startup | Schema out of date. Run `alembic upgrade head` (Docker does this automatically). |
+| "Cannot reach Telegram" and the container restarts in a loop | No outbound access to `api.telegram.org`. Check the firewall, proxy or DNS. |
+| Bot ignores you | Your ID isn't in `TELEGRAM_ALLOWED_USER_IDS` (check `audit_logs` for `access_denied`), or you wrote in a group (only private chats are served), or you hit the rate limit (the bot tells you once, with the time it lifts). |
+| "Gemini rejected the API key" | Regenerate the key at https://aistudio.google.com/apikey. |
+| "quota is exhausted" / "request budget used" | Free-tier daily quota, or your `GEMINI_DAILY_REQUEST_BUDGET`. Deterministic features keep working. |
+| "Something went wrong (ref abc123)" | Run `docker compose logs \| grep ref=abc123`. |
+| `/status` shows "heartbeat stale" | The scheduler isn't running. The watchdog restarts the bot within about 5 minutes. If it repeats, check the logs. |
+| Permission denied on `data/` in Docker | Set `APP_UID`/`APP_GID` in `.env` to the output of `id -u` and `id -g`. |
 
 ## Dependencies and why
 

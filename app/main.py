@@ -33,14 +33,18 @@ def main() -> int:
         logger.error("Database schema is at %s but code expects %s. Run: alembic upgrade head", current, head)
         return 3
 
-    from app.bot.application import ALLOWED_UPDATES, build_application
-
     from telegram.error import InvalidToken, NetworkError
 
+    from app.bot.application import ALLOWED_UPDATES, build_application
+    from app.services.heartbeat import start_watchdog
+
     application = build_application(settings)
+    start_watchdog(settings.heartbeat_file, settings.heartbeat_max_age_seconds)
     logger.info("Starting bot (timezone=%s, model=%s)", settings.timezone, settings.gemini_model)
     try:
-        application.run_polling(allowed_updates=ALLOWED_UPDATES, drop_pending_updates=False)
+        # bootstrap_retries: ride out short network blips at startup before giving up.
+        application.run_polling(allowed_updates=ALLOWED_UPDATES, drop_pending_updates=False,
+                                bootstrap_retries=5)
     except InvalidToken:
         logger.error("Telegram rejected TELEGRAM_BOT_TOKEN. Check the token from @BotFather.")
         return 2

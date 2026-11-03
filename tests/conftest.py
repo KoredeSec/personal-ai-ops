@@ -26,6 +26,8 @@ def db(tmp_path, monkeypatch):
     """Fresh SQLite database migrated to head via Alembic (not create_all)."""
     url = f"sqlite:///{tmp_path / 'test.db'}"
     monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("HEARTBEAT_FILE", str(tmp_path / "heartbeat"))
+    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
     _clear_caches()
     from app.database.migrate import upgrade_to_head
 

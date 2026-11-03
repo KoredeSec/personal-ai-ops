@@ -70,6 +70,10 @@ class LLMBudgetExceededError(LLMError):
     )
 
 
+class LLMRateLimitedError(LLMError):
+    user_message = "Gemini is rate-limiting requests right now. Try again in about a minute."
+
+
 class LLMUnavailableError(LLMError):
     user_message = "The AI service is temporarily unavailable. Please try again in a few minutes."
 
@@ -235,11 +239,13 @@ class GeminiClient:
         store: UsageStore | None = None,
         backend: Backend | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ):
         self.settings = settings
         self.store = store
         self._backend = backend
         self._sleep = sleep
+        self._clock = clock
         self._secrets = settings.secret_values()
         # Outer safety net in case the SDK's own HTTP timeout does not fire.
         self.hard_timeout_seconds = settings.gemini_timeout_seconds + 5
@@ -279,8 +285,16 @@ class GeminiClient:
         agent: str = "system",
         action: str = "generate",
         user_id: int | None = None,
+        deadline_seconds: float | None = None,
         _schema: type[BaseModel] | None = None,
     ) -> LLMResult:
+        """Run one model call with retries.
+
+        `deadline_seconds` bounds total wall-clock time including retries and
+        backoff. Interactive (user-waiting) calls should pass
+        `settings.gemini_interactive_deadline_seconds`; background jobs may
+        omit it and use the full retry policy.
+        """
         req = LLMRequest(
             model=model or self.model_for(tier),
             prompt=self._cap_prompt(prompt),
@@ -303,14 +317,22 @@ class GeminiClient:
             raise LLMBudgetExceededError("Local daily request budget reached")
 
         backend = self._get_backend()
-        started = time.monotonic()
+        started = self._clock()
         attempts = 0
         last_exc: BaseException | None = None
+        deadline_hit = False
         max_attempts = self.settings.gemini_max_retries + 1
         while attempts < max_attempts:
             attempts += 1
+            timeout = self.hard_timeout_seconds
+            if deadline_seconds is not None:
+                remaining = deadline_seconds - (self._clock() - started)
+                if remaining <= 0:
+                    deadline_hit = True
+                    break
+                timeout = min(timeout, remaining)
             try:
-                result = await asyncio.wait_for(backend(req), timeout=self.hard_timeout_seconds)
+                result = await asyncio.wait_for(backend(req), timeout=timeout)
             except BaseException as exc:  # noqa: BLE001 - classified below
                 if isinstance(exc, asyncio.CancelledError):
                     raise
@@ -324,6 +346,9 @@ class GeminiClient:
                 if delay is None:  # server asked for longer than we are willing to wait
                     self._fail(req, agent, action, user_id, started, attempts, exc)
                     raise LLMQuotaExceededError("Rate limited for an extended period") from exc
+                if deadline_seconds is not None and (self._clock() - started) + delay >= deadline_seconds:
+                    deadline_hit = True
+                    break
                 logger.warning(
                     "Gemini call failed (attempt %d/%d, %s); retrying in %.1fs",
                     attempts, max_attempts, type(exc).__name__, delay,
@@ -331,7 +356,7 @@ class GeminiClient:
                 await self._sleep(delay)
                 continue
 
-            result.latency_ms = int((time.monotonic() - started) * 1000)
+            result.latency_ms = int((self._clock() - started) * 1000)
             result.attempts = attempts
             self._record(UsageRecord(
                 agent, action, req.model, True, user_id=user_id,
@@ -346,8 +371,13 @@ class GeminiClient:
                 self.store.cache_set(cache_key, req.model, result.text, cache_ttl_hours or 0)
             return result
 
-        assert last_exc is not None
+        if last_exc is None:  # deadline elapsed before any attempt completed
+            last_exc = TimeoutError("Interactive deadline elapsed")
         self._fail(req, agent, action, user_id, started, attempts, last_exc)
+        if deadline_hit:
+            if _status_code(last_exc) == 429:
+                raise LLMRateLimitedError("Deadline reached while rate limited") from last_exc
+            raise LLMUnavailableError("Deadline reached before a successful response") from last_exc
         if isinstance(last_exc, LLMError):
             raise last_exc
         if is_auth_error(last_exc):
@@ -388,6 +418,7 @@ class GeminiClient:
             "system": req.system_instruction,
             "prompt": req.prompt,
             "temperature": req.temperature,
+            "max_output_tokens": req.max_output_tokens,
             "schema": req.response_schema.model_json_schema() if req.response_schema else None,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -407,7 +438,7 @@ class GeminiClient:
                      agent, action, attempts, type(exc).__name__, msg)
         self._record(UsageRecord(
             agent, action, req.model, False, user_id=user_id,
-            latency_ms=int((time.monotonic() - started) * 1000), attempts=attempts,
+            latency_ms=int((self._clock() - started) * 1000), attempts=attempts,
             error_type=type(exc).__name__, error_message=msg,
         ))
 

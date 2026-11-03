@@ -92,7 +92,7 @@ async def bot(settings):
 async def test_start_registers_user_and_replies(bot):
     app, fake = bot
     await app.process_update(make_update(app, "/start"))
-    assert "Initialised" in fake.sent_texts()[-1]
+    assert "Ready" in fake.sent_texts()[-1]
     assert "WAT" in fake.sent_texts()[-1]
     with session_scope() as s:
         u = s.scalar(select(User))
@@ -107,7 +107,8 @@ async def test_unauthorised_user_gets_no_response_and_is_audited(bot):
     with session_scope() as s:
         assert s.scalar(select(User)) is None
         events = s.scalars(select(AuditLog).where(AuditLog.event_type == "access_denied")).all()
-        assert len(events) == 2 and events[0].actor_telegram_id == STRANGER
+        # Throttled: one audit row per stranger per hour, however many messages.
+        assert len(events) == 1 and events[0].actor_telegram_id == STRANGER
 
 
 async def test_owner_in_group_chat_is_ignored(bot):
@@ -123,7 +124,8 @@ async def test_help_ping_status(bot):
     help_text, ping_text, status_text = fake.sent_texts()
     assert "/status" in help_text
     assert ping_text.startswith("pong")
-    assert "✅ Database" in status_text and "0001_initial" in status_text
+    assert "✅ OK – Database" in status_text and "0002_delivery_state" in status_text
+    assert "Milestone" not in help_text
     assert "AIza" not in status_text and "TEST_TOKEN" not in status_text  # no secrets
 
 
@@ -138,7 +140,8 @@ async def test_unknown_command_and_plain_text_fallbacks(bot):
     await app.process_update(make_update(app, "/nonsense"))
     await app.process_update(make_update(app, "remind me tomorrow"))
     unknown, text = fake.sent_texts()
-    assert "Unknown" in unknown and "Milestone 2" in text
+    assert "don't know that command" in unknown and "free-text" in text
+    assert "Milestone" not in unknown + text
 
 
 async def test_known_command_does_not_also_trigger_unknown_handler(bot):
@@ -159,7 +162,8 @@ async def test_rate_limit_warns_once_then_stays_silent(settings):
         await app.shutdown()
     texts = fake.sent_texts()
     assert texts[:2] == [t for t in texts[:2] if t.startswith("pong")]
-    assert len(texts) == 3 and texts[2].startswith("Rate limit")
+    assert len(texts) == 3 and texts[2].startswith("Too many messages")
+    assert "WAT" in texts[2]  # exact local unblock time
 
 
 async def test_handler_exception_returns_reference_not_details(bot, monkeypatch):
@@ -182,6 +186,63 @@ async def test_post_init_sets_commands_and_registers_jobs(bot):
     try:
         await app.post_init(app)
         assert any(e == "setMyCommands" for e, _ in fake.calls)
-        assert [j.name for j in app.job_queue.jobs()] == ["housekeeping"]
+        names = sorted(j.name for j in app.job_queue.jobs())
+        assert names == ["backup", "heartbeat", "housekeeping", "reminder_dispatch"]
     finally:
         await app.job_queue.stop()
+
+
+async def test_slow_ai_call_does_not_block_other_commands(settings):
+    """With concurrent updates, /ping answers while /aitest is still waiting on Gemini."""
+    import asyncio
+
+    release = asyncio.Event()
+
+    class SlowLLM(StubLLM):
+        async def generate(self, prompt, **kw):
+            await release.wait()
+            return await super().generate(prompt, **kw)
+
+    fake = FakeTelegram()
+    app = build_application(settings, request=fake, llm=SlowLLM(settings))
+    await app.initialize()
+    await app.start()
+    try:
+        await app.update_queue.put(make_update(app, "/aitest"))
+        await app.update_queue.put(make_update(app, "/ping"))
+        for _ in range(100):
+            if any(t.startswith("pong") for t in fake.sent_texts()):
+                break
+            await asyncio.sleep(0.02)
+        assert any(t.startswith("pong") for t in fake.sent_texts()), "ping blocked by slow AI call"
+        assert not any("Gemini is working" in t for t in fake.sent_texts())
+        assert any(e == "sendChatAction" for e, _ in fake.calls)  # typing indicator shown
+        release.set()
+        for _ in range(100):
+            if any("Gemini is working" in t for t in fake.sent_texts()):
+                break
+            await asyncio.sleep(0.02)
+        assert any("Gemini is working" in t for t in fake.sent_texts())
+    finally:
+        release.set()
+        await app.stop()
+        await app.shutdown()
+
+
+async def test_long_replies_are_chunked(bot):
+    from app.bot.reply import reply_text
+
+    app, fake = bot
+    update = make_update(app, "/ping")
+    await reply_text(update, "line\n" * 2000)  # ~10k chars
+    sent = fake.sent_texts()
+    assert len(sent) >= 3 and all(len(t) <= 4096 for t in sent)
+
+
+async def test_status_reports_problems_first(bot):
+    app, fake = bot
+    await app.process_update(make_update(app, "/status"))
+    text = fake.sent_texts()[-1]
+    # Fresh test env: no heartbeat written and no backup yet -> listed as problems up top.
+    assert text.startswith("<b>2 problem(s):</b>")
+    assert "heartbeat stale" in text and "No backup" in text

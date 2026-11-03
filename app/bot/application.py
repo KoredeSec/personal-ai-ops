@@ -10,11 +10,14 @@ from telegram.ext import Application, ApplicationBuilder, ContextTypes, Defaults
 from telegram.request import BaseRequest
 
 from app.bot.handlers import basic
+from app.bot.jobs import build_jobs, on_job_error
 from app.bot.middleware import install_gates
 from app.core.config import Settings
 from app.core.llm import GeminiClient
-from app.core.scheduler import default_jobs, register_jobs
+from app.core.scheduler import register_jobs
 from app.services.audit import AuditEvent, audit
+from app.services.heartbeat import write_heartbeat
+from app.services.notifications import recover_stale_reminders
 from app.services.llm_store import DatabaseUsageStore
 
 logger = logging.getLogger(__name__)
@@ -28,7 +31,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     audit(AuditEvent.HANDLER_ERROR, actor, ref=ref, error_type=type(context.error).__name__)
     if isinstance(update, Update) and update.effective_message:
         try:
-            await update.effective_message.reply_text(f"Something went wrong (ref {ref}). It has been logged.")
+            await update.effective_message.reply_text(
+                f"Something went wrong (ref {ref}). Please try again. If it keeps happening, "
+                f"search the server logs for ref={ref}."
+            )
         except Exception:
             logger.exception("Failed to send error message ref=%s", ref)
 
@@ -38,7 +44,9 @@ async def _post_init(application: Application) -> None:
     me = await application.bot.get_me()
     logger.info("Connected to Telegram as @%s (id=%s)", me.username, me.id)
     await application.bot.set_my_commands([BotCommand(c, d) for c, d in basic.BOT_COMMANDS])
-    register_jobs(application, default_jobs())
+    recover_stale_reminders(settings)  # anything a crashed run left in SENDING
+    write_heartbeat(settings.heartbeat_file)
+    register_jobs(application, build_jobs(settings), on_error=on_job_error)
     audit(AuditEvent.BOT_STARTED, None, bot_username=me.username,
           allowed_users=len(settings.telegram_allowed_user_ids))
 
@@ -54,7 +62,8 @@ def build_application(
         ApplicationBuilder()
         .token(settings.telegram_bot_token.get_secret_value())
         .defaults(Defaults(tzinfo=settings.tz))
-        .concurrent_updates(False)  # single user: process in order, simpler state
+        # Concurrent so a slow AI reply never blocks quick commands like /tasks.
+        .concurrent_updates(settings.concurrent_updates)
         .post_init(_post_init)
     )
     if request is not None:

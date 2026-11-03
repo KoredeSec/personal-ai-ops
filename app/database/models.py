@@ -127,6 +127,13 @@ class ApplicationStatus(enum.StrEnum):
     EXPIRED = "expired"
 
 
+class DeliveryStatus(enum.StrEnum):
+    SENDING = "sending"  # claimed; outcome unknown until marked
+    SENT = "sent"
+    RETRY = "retry"  # last attempt failed; may be claimed again
+    FAILED = "failed"  # gave up after max attempts
+
+
 class ExecutionStatus(enum.StrEnum):
     SUCCESS = "success"
     ERROR = "error"
@@ -267,6 +274,12 @@ class Reminder(TimestampMixin, Base):
 
 # --------------------------------------------------------------------------
 # Research
+#
+# Data ownership: research sources, articles and opportunities are GLOBAL
+# (no user_id). This is a single-owner system; the research corpus is shared
+# knowledge, while Chief-of-Staff data (tasks, reminders, follow-ups, memory)
+# is per user. If multi-user support is ever needed, add user_id to
+# opportunities (application status is personal) via a migration.
 # --------------------------------------------------------------------------
 class ResearchSource(TimestampMixin, Base):
     __tablename__ = "research_sources"
@@ -447,14 +460,25 @@ class LLMCacheEntry(Base):
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
-class NotificationLog(Base):
-    """Idempotency ledger: a notification is sent at most once per dedupe_key."""
+class NotificationLog(TimestampMixin, Base):
+    """Delivery ledger keyed by dedupe_key (e.g. "reminder:42", "briefing:2026-11-04").
+
+    Lifecycle: SENDING (claimed) -> SENT, or back to retry, or FAILED.
+    `updated_at` acts as the claim lease: a SENDING row older than the lease
+    belongs to a crashed attempt and may be reclaimed. See
+    app/services/notifications.py for the exact delivery guarantees.
+    """
 
     __tablename__ = "notification_log"
+    __table_args__ = (Index("ix_notification_log_status_updated", "status", "updated_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     dedupe_key: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
     kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[DeliveryStatus] = mapped_column(
+        str_enum(DeliveryStatus), default=DeliveryStatus.SENDING, nullable=False
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(500))
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utcnow, nullable=False)

@@ -36,10 +36,22 @@ class Settings(BaseSettings):
     backup_dir: Path = PROJECT_ROOT / "data" / "backups"
     backup_retention_count: int = Field(default=14, ge=1)
 
+    backup_time_local: str = Field(default="02:30", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
     # --- Telegram --------------------------------------------------------
     telegram_bot_token: SecretStr | None = None
     telegram_allowed_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     rate_limit_per_minute: int = Field(default=20, ge=1)
+    # Updates processed concurrently, so a slow AI reply never blocks /tasks.
+    concurrent_updates: int = Field(default=8, ge=1, le=64)
+
+    # --- Delivery & health ------------------------------------------------
+    delivery_max_attempts: int = Field(default=5, ge=1, le=20)
+    # A claim older than this is treated as a crashed send and reclaimed.
+    delivery_lease_seconds: int = Field(default=300, ge=30)
+    heartbeat_file: Path = PROJECT_ROOT / "data" / "heartbeat"
+    heartbeat_interval_seconds: int = Field(default=60, ge=10)
+    heartbeat_max_age_seconds: int = Field(default=300, ge=30)
 
     # --- Gemini ----------------------------------------------------------
     gemini_api_key: SecretStr | None = None
@@ -49,6 +61,8 @@ class Settings(BaseSettings):
     gemini_model_light: str = "gemini-2.5-flash-lite"
     gemini_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     gemini_max_retries: int = Field(default=4, ge=0, le=10)
+    # Max total seconds (incl. retries) a user waits on an interactive reply.
+    gemini_interactive_deadline_seconds: float = Field(default=20.0, gt=0, le=300)
     # Includes "thinking" tokens on thinking models, so keep generous.
     gemini_max_output_tokens: int = Field(default=4096, ge=64)
     # Optional thinking budget for models that support it (0 disables

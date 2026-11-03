@@ -38,17 +38,26 @@ class JobSpec:
             raise ValueError(f"Job {self.name}: set exactly one of interval_seconds or daily_at")
 
 
-def _safe(spec: JobSpec) -> JobCallback:
+ErrorCallback = Callable[[str, BaseException, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
+
+
+def _safe(spec: JobSpec, on_error: ErrorCallback | None) -> JobCallback:
     async def runner(context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await spec.callback(context)
-        except Exception:
+        except Exception as exc:
             logger.exception("Scheduled job %s failed", spec.name)
+            if on_error is not None:
+                try:
+                    await on_error(spec.name, exc, context)
+                except Exception:
+                    logger.exception("Job error callback failed for %s", spec.name)
 
     return runner
 
 
-def register_jobs(application: Application, specs: list[JobSpec]) -> list[str]:
+def register_jobs(application: Application, specs: list[JobSpec],
+                  on_error: ErrorCallback | None = None) -> list[str]:
     jq = application.job_queue
     if jq is None:
         raise RuntimeError("JobQueue unavailable: install python-telegram-bot[job-queue]")
@@ -57,25 +66,10 @@ def register_jobs(application: Application, specs: list[JobSpec]) -> list[str]:
         for existing in jq.get_jobs_by_name(spec.name):
             existing.schedule_removal()
         if spec.interval_seconds is not None:
-            jq.run_repeating(_safe(spec), interval=spec.interval_seconds, first=spec.first_delay_seconds,
+            jq.run_repeating(_safe(spec, on_error), interval=spec.interval_seconds, first=spec.first_delay_seconds,
                              name=spec.name, job_kwargs=JOB_KWARGS)
         else:
-            jq.run_daily(_safe(spec), time=spec.daily_at, name=spec.name, job_kwargs=JOB_KWARGS)
+            jq.run_daily(_safe(spec, on_error), time=spec.daily_at, name=spec.name, job_kwargs=JOB_KWARGS)
         names.append(spec.name)
         logger.info("Registered job %s", spec.name)
     return names
-
-
-# --------------------------------------------------------------------------
-# Built-in jobs (Milestone 1)
-# --------------------------------------------------------------------------
-async def housekeeping_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    from app.services.llm_store import purge_expired_cache
-
-    removed = purge_expired_cache()
-    if removed:
-        logger.info("Housekeeping: purged %d expired LLM cache entries", removed)
-
-
-def default_jobs() -> list[JobSpec]:
-    return [JobSpec(name="housekeeping", callback=housekeeping_job, interval_seconds=3600, first_delay_seconds=60)]

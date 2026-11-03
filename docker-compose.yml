@@ -21,9 +21,11 @@ services:
       - ALL
     mem_limit: 512m
     healthcheck:
-      test: ["CMD", "python", "-c", "from app.database.session import check_database; check_database()"]
-      interval: 5m
-      timeout: 10s
+      # Fails if the DB is unreachable OR the in-process heartbeat is stale (hung bot).
+      test: ["CMD", "python", "-m", "scripts.healthcheck"]
+      interval: 2m
+      timeout: 15s
+      start_period: 3m
       retries: 3
     logging:
       driver: json-file
