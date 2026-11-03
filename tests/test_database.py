@@ -16,7 +16,7 @@ EXPECTED_TABLES = {
     "users", "preferences", "memory_items", "projects", "tasks", "reminders", "followups",
     "research_sources", "research_articles", "opportunities", "opportunity_deadlines",
     "conversation_summaries", "agent_execution_logs", "audit_logs", "llm_cache",
-    "notification_log",
+    "notification_log", "decision_events",
 }
 
 
@@ -24,7 +24,7 @@ def test_migration_creates_all_tables(db):
     tables = set(inspect(build_engine(db)).get_table_names())
     assert EXPECTED_TABLES <= tables
     current, head = schema_status(db)
-    assert current == head == "0002_delivery_state"
+    assert current == head == "0003_decision_events"
 
 
 def test_migrations_match_models_exactly(db):

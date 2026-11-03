@@ -134,6 +134,11 @@ class DeliveryStatus(enum.StrEnum):
     FAILED = "failed"  # gave up after max attempts
 
 
+class DecisionOutcome(enum.StrEnum):
+    REMOVED = "removed"  # the system decided/handled it; the owner didn't have to
+    ADDED = "added"  # the system handed a decision back to the owner
+
+
 class ExecutionStatus(enum.StrEnum):
     SUCCESS = "success"
     ERROR = "error"
@@ -406,6 +411,26 @@ class ConversationSummary(Base):
     agent: Mapped[str] = mapped_column(String(50), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     message_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utcnow, nullable=False)
+
+
+class DecisionEvent(Base):
+    """One decision taken off the owner's plate, or handed back to them.
+
+    Feeds the weekly review's "decisions removed vs added" metric. Kinds are
+    free-form strings (e.g. "reminder_delivered", "clarification_asked") so
+    new sources need no migration; see agents/chief_of_staff/decisions.py.
+    """
+
+    __tablename__ = "decision_events"
+    __table_args__ = (Index("ix_decision_events_user_created", "user_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    agent: Mapped[str] = mapped_column(String(50), nullable=False)
+    kind: Mapped[str] = mapped_column(String(100), nullable=False)
+    outcome: Mapped[DecisionOutcome] = mapped_column(str_enum(DecisionOutcome), nullable=False)
+    ref: Mapped[str | None] = mapped_column(String(200))  # e.g. "task:12"
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utcnow, nullable=False)
 
 

@@ -429,8 +429,8 @@ class GeminiClient:
         if server_delay is not None:
             if server_delay > MAX_SERVER_RETRY_DELAY:
                 return None
-            return server_delay + random.uniform(0, 1)
-        return min(MAX_BACKOFF_SECONDS, 2 ** (attempt - 1)) + random.uniform(0, 0.5)
+            return server_delay + random.uniform(0, 1)  # noqa: S311 - retry jitter, not security
+        return min(MAX_BACKOFF_SECONDS, 2 ** (attempt - 1)) + random.uniform(0, 0.5)  # noqa: S311
 
     def _fail(self, req, agent, action, user_id, started, attempts, exc) -> None:
         msg = redact(str(exc), self._secrets)[:500]

@@ -19,8 +19,8 @@ The goal isn't to *do more* — it's to take decisions off my plate (what to wor
 |---|---|---|
 | 1 | Structure, config, database + migrations, Gemini client, Telegram bot core, Docker | **Done** (offline tests pass; live Telegram not yet verified, see below) |
 | 1.1 | Responsiveness, crash-safe delivery, backups, watchdog, alerts | **Done** |
-| 2 | Chief of Staff: tasks, reminders, follow-ups, briefings, memory, NL routing | Next |
-| 3 | Research agent: RSS ingestion, article processing, opportunities, digests | Planned |
+| 2 | Chief of Staff: tasks, reminders, follow-ups, briefings, weekly review, memory, plain-language routing, decision tracking | **Done** (offline tests pass; live Telegram not yet verified) |
+| 3 | Research agent: RSS ingestion, article processing, opportunities, digests | Next |
 | 4 | Integration tests, security review, deployment, backup/restore, docs | Planned |
 
 ## Quick start (local)
@@ -44,7 +44,34 @@ Required `.env` values:
 
 Model names are set with `GEMINI_MODEL` (reasoning and summaries) and `GEMINI_MODEL_LIGHT` (classification and routing). Check https://ai.google.dev/gemini-api/docs/models for the current free-tier model IDs.
 
-## Verifying Milestone 1 on your machine
+## Using it
+
+Write to the bot normally. These all work without an AI call:
+
+| You write | What happens |
+|---|---|
+| `Remind me to follow up with my mentor next Monday` | Reminder for Mon 09:00, plus a tracked follow-up with "my mentor" |
+| `add task submit Erasmus application by 15 Nov urgent` | Task with a deadline and urgent priority |
+| `I need to renew my passport next month` | Task due 1 Dec |
+| `follow up with Dr Ade about the reference letter on friday` | Follow-up with context and a date |
+| `remember that my goal is a cloud security role in Europe` | Stored as an objective, used in weekly reviews |
+| `done 12` | Marks task #12 done |
+| `what are my outstanding commitments?` · `what's overdue` | Task lists |
+| `brief me` · `prepare my priorities for tomorrow` · `weekly review` | Planning summaries |
+
+Anything the rules don't recognise goes to Gemini, which can only pick from the same fixed set of actions. Its replies are labelled "interpreted by AI". Every change comes with **Undo** and **Edit** buttons. If a time is missing the bot asks for it, and a time in the past is rejected, never guessed. Repeating reminders aren't supported yet, and the bot says so instead of setting a wrong one-off.
+
+**Dates** are parsed by a small deterministic parser (`app/agents/chief_of_staff/dates.py`). A date without a time gets your default time (09:00), and `20/11` means 20 November. `tonight` is 20:00, `this weekend` is Saturday 10:00, and `next week` is the coming Monday.
+
+**Scheduled messages.** The daily briefing (07:00) and weekly review (Sunday 18:00) are sent automatically, at most once each. If the bot was down at that time, they're sent when it comes back (up to 6 hours late). Change the times with `/settings`.
+
+**Quiet hours** (22:00–07:00) hold back *system* messages such as job-failure alerts. Those show up in your next briefing instead. Reminders you set yourself always fire at the time you chose.
+
+**Decision tracking.** The weekly review reports how many decisions the system took off your plate (reminders delivered, requests handled, priorities ranked) against how many it handed back (clarifying questions, conflicts, overdue items, your Undo/Edit corrections). It also reports net open loops: tasks and follow-ups opened minus closed. When more are opened than closed, it says so.
+
+**Your data.** `/memory` shows exactly what's stored. `/forget 3`, `/forget study` or `/forget all` deletes permanently. `/export` sends you everything as JSON.
+
+## Verifying on your machine
 
 ```bash
 python -m scripts.check_gemini              # one text call + one structured-JSON call
@@ -58,6 +85,8 @@ Then, in Telegram:
 - `/status` should start with "All systems OK" once the first heartbeat and the first nightly backup exist. Run `python -m scripts.backup_db` to create a backup straight away.
 - `/aitest` makes one small Gemini call and shows the model, tokens and latency.
 - A message from any other Telegram account gets **no reply**, and an `access_denied` row is written to `audit_logs`.
+- `remind me to test this in 2 minutes`: the reminder arrives about 2 minutes later (the dispatcher checks every 30 seconds).
+- `/today` shows the briefing. Set `/settings briefing HH:MM` a few minutes ahead to see it arrive automatically.
 
 ## Docker
 
@@ -161,13 +190,13 @@ Backups sit on the same disk as the database. Copy `data/backups/` somewhere els
 | `pydantic-settings` | Typed, validated env config with secret types (Pydantic already comes with google-genai) |
 | `httpx` | HTTP client, already a dependency of both SDKs |
 | `tzdata` | Timezone database for `zoneinfo` in slim containers |
-| `pytest`, `pytest-asyncio` | Tests only |
+| `pytest`, `pytest-asyncio`, `ruff` | Tests and linting only |
 
-Planned for later milestones, to be confirmed before adding: `dateparser` (relative dates such as "next Monday", M2), `feedparser` (RSS parsing, M3) and possibly `trafilatura` (main-text extraction from web pages, M3).
+`dateparser` was evaluated for Milestone 2 and rejected. It returned nothing for "next monday" and "tonight", and kept the current time for "tomorrow". See [ENGINEERING_NOTES.md](ENGINEERING_NOTES.md). Planned for Milestone 3, to be confirmed before adding: `feedparser` (RSS parsing) and possibly `trafilatura` (main-text extraction from web pages).
 
 ## Database tables
 
-`users`, `preferences`, `memory_items`, `projects`, `tasks`, `reminders`, `followups`, `research_sources`, `research_articles`, `opportunities`, `opportunity_deadlines`, `conversation_summaries`, `agent_execution_logs`, `audit_logs`, `llm_cache`, `notification_log`.
+`users`, `preferences`, `memory_items`, `projects`, `tasks`, `reminders`, `followups`, `research_sources`, `research_articles`, `opportunities`, `opportunity_deadlines`, `conversation_summaries`, `agent_execution_logs`, `audit_logs`, `llm_cache`, `notification_log`, `decision_events`.
 
 Opportunities record `verification_status`, a per-field `field_verification` map and `is_verified` on each deadline. This keeps verified facts separate from assumptions.
 

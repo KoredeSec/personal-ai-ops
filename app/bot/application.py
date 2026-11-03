@@ -9,7 +9,7 @@ from telegram import BotCommand, Update
 from telegram.ext import Application, ApplicationBuilder, ContextTypes, Defaults
 from telegram.request import BaseRequest
 
-from app.bot.handlers import basic
+from app.bot.handlers import basic, chief_of_staff
 from app.bot.jobs import build_jobs, on_job_error
 from app.bot.middleware import install_gates
 from app.core.config import Settings
@@ -17,8 +17,8 @@ from app.core.llm import GeminiClient
 from app.core.scheduler import register_jobs
 from app.services.audit import AuditEvent, audit
 from app.services.heartbeat import write_heartbeat
-from app.services.notifications import recover_stale_reminders
 from app.services.llm_store import DatabaseUsageStore
+from app.services.notifications import recover_stale_reminders
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ async def _post_init(application: Application) -> None:
     settings: Settings = application.bot_data["settings"]
     me = await application.bot.get_me()
     logger.info("Connected to Telegram as @%s (id=%s)", me.username, me.id)
-    await application.bot.set_my_commands([BotCommand(c, d) for c, d in basic.BOT_COMMANDS])
+    await application.bot.set_my_commands([BotCommand(c, d) for c, d in basic.bot_commands()])
     recover_stale_reminders(settings)  # anything a crashed run left in SENDING
     write_heartbeat(settings.heartbeat_file)
     register_jobs(application, build_jobs(settings), on_error=on_job_error)
@@ -76,7 +76,7 @@ def build_application(
 
     install_gates(application, settings)
     basic.register(application)
-    # Milestone 2/3 handler modules register here, before the fallbacks.
+    chief_of_staff.register(application)
     basic.register_fallbacks(application)
     application.add_error_handler(error_handler)
     return application

@@ -138,10 +138,9 @@ def test_denial_throttle_memory_bounded():
 # Job failure alerts
 # --------------------------------------------------------------------------
 async def test_job_failure_alerts_owner_once_per_day(settings):
-    from tests.test_bot import FakeTelegram, StubLLM
-
     from app.bot.application import build_application
     from app.bot.jobs import on_job_error
+    from tests.test_bot import FakeTelegram, StubLLM
 
     fake = FakeTelegram()
     app = build_application(settings, request=fake, llm=StubLLM(settings))

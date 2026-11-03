@@ -66,9 +66,10 @@ Those go *up* when the system is doing badly. What I actually want to watch:
   the system is working, this trends down or holds flat while I feel calmer. If
   it climbs, the agents are generating work, not absorbing it.
 
-None of this is built yet. It's a Milestone 2–3 concern. But I'm writing the
-execution log now (Milestone 1) with these questions in mind, so the data exists
-when I'm ready to ask.
+*Update, Milestone 2:* the first two are now built and show up in every weekly
+review: decisions taken off my plate vs. handed back, and net open loops. The
+definitions are in the Milestone 2 entry below. "Research that dies in the
+inbox" has to wait for the Research Agent.
 
 ### "Does the Chief of Staff choose what to research, or do you assign it?"
 
@@ -100,6 +101,119 @@ approval" rule: **the agents can prepare, surface and recommend; crossing into
 action — spending quota, contacting people, committing my time — waits for a
 human yes.** If I ever relax that, it'll be one narrow path at a time, written
 down here first.
+
+---
+
+## 2026-11-03 — Milestone 2: the Chief of Staff
+
+This is the milestone where the thing becomes useful: tasks, reminders,
+follow-ups, a daily briefing, a weekly review, memory, and being able to just
+*write* to it instead of remembering commands.
+
+**I reversed my own dependency decision.** I'd planned to use `dateparser` for
+phrases like "next Monday", and I'd already said so. Before building on it, I
+gave it sixteen phrases I actually type. It returned nothing for "next monday",
+"tonight" and "this evening", which are three of the most common. It kept the
+current clock time for "tomorrow", so a reminder set at 9pm would fire at 9pm
+the next day. It put "friday" at midnight. And when pulling a date out of a
+sentence, it ate neighbouring words, so "call mum tomorrow at 6pm about the
+trip" would have lost "about the". I'd have had to wrap nearly every case it
+handled. So I wrote a small, strict grammar instead, about 150 lines with no
+dependencies. The rules are written at the top of the file, so you can see
+exactly what "tonight" means (20:00) and argue with it. The most important
+rule: a time in the past is an *error*, never a guess. "Remind me this
+morning", sent at 9pm, gets pushback, not a reminder for tomorrow morning that
+I didn't ask for. Lesson: test a dependency on your real inputs before you
+commit to it, even one you've already announced.
+
+**Rules first, AI second.** The common phrasings (remind me, add task, I need to,
+follow up with, done 12, what's overdue) are matched by plain patterns. That's
+free, instant and testable, and it covers every example from my original brief
+without touching Gemini. Only what the rules can't place goes to the model, and
+the model can only *pick from the same closed list of actions*. It doesn't
+execute anything. Even the date it returns gets re-parsed by my own parser, so
+the model can't slip in a date in 2020. Anything the model interpreted is
+labelled "interpreted by AI" in the reply, so I always know which path a
+request took.
+
+**Every change has Undo and Edit.** If you let people write freely, the system
+*will* misread them sometimes. That's acceptable if fixing it takes one tap and
+not acceptable if it takes five commands. Each reply that creates something
+carries buttons. Edit lets me send the corrected sentence, and the same parser
+runs on it again. Buttons work once, and every one is checked against the
+owner, so tampered button data can't touch anything it shouldn't.
+
+**One sentence can create two things.** "Remind me to follow up with my mentor
+next Monday" creates a reminder *and* a tracked follow-up. The follow-up is
+the thing I actually care about: who I owe a message, and since when. Undoing
+the reminder undoes both.
+
+**Honest about what it can't do.** Repeating reminders ("every Monday") aren't
+built yet. The easy wrong move is to quietly set a one-off for the first Monday
+and let me believe I'm covered. Instead it says plainly that it hasn't set
+anything. A system that fails loudly is one I can trust.
+
+**The decision metric, made concrete.** Back to the comment that started all
+this. Every action is now recorded as either taking a decision off my plate
+or handing one back:
+
+- *removed*: a reminder fired on time, a request was handled without a follow-up
+  question, the briefing ranked my priorities, a due follow-up was surfaced.
+- *added*: it had to ask me something, it flagged a conflict or an overdue item,
+  or I had to use Undo/Edit because it got me wrong.
+
+The weekly review shows the totals plus net open loops: tasks and follow-ups
+opened minus closed. If more are opened than closed, the review says so in plain
+words: the system created more work than it absorbed. The definitions are
+rough on purpose, and they're written down at the top of `decisions.py` so they
+can be argued with. Counting my own corrections against the system felt
+important. If it misreads me a lot, that should hurt its score.
+
+**The briefing doesn't use AI at all.** What's due, what's overdue, what
+overlaps and how much free time I have are arithmetic. Ranking is a plain
+score: priority plus deadline pressure, with overdue items on top. "Time for
+personal development" is my waking hours minus work hours, time blocks and
+estimated effort, and the briefing states those assumptions so I can correct
+them. The one place I *do* use Gemini is the weekly review's suggested
+priorities, because relating open tasks to long-term goals is real reasoning.
+Even there, if the quota's gone, it falls back to deadline order and says so.
+
+**Scheduled messages poll instead of firing at an exact time.** The briefing
+check runs every five minutes and asks "is it past briefing time, and have I
+sent today's?". Each delivery is keyed by date in the same crash-safe ledger
+reminders use. If the bot was down at 7:00, I get the briefing when it comes
+back, not never, and a restart can't send it twice. Changing the briefing time
+needs no rescheduling either.
+
+**Quiet hours only apply to the system's own messages.** My first instinct was to
+hold everything between 22:00 and 07:00. But if I explicitly ask for a reminder
+at 23:00, holding it would be the system overruling me. So quiet hours apply
+to what the *system* decides to send, like job-failure alerts. Those are
+held overnight and appear in the morning briefing instead. Reminders I set
+always fire when I said.
+
+**Data I can see and remove.** `/memory` shows exactly what's stored, and only what
+I explicitly told it. `/forget` deletes permanently: forgotten means gone, not
+hidden. `/export` hands me everything as JSON. Since the repo is public, I
+expect people to ask how personal data is handled, and these are the answers.
+
+**A mistake I made along the way.** When I uninstalled `dateparser`, I removed its
+dependencies too, including `tzlocal`. The scheduler library also needs that
+package. Nothing crashed. The job queue just quietly stopped existing, and the
+only sign was a warning in the test output. I caught it because tests asserted
+the jobs were registered. It's another argument for tests that check things
+actually *exist*, not just that nothing threw.
+
+**A linter caught a time bomb.** I added `ruff` to CI. Its best catch was three
+callbacks that captured loop variables. They're harmless today because each
+callback runs inside its own loop iteration. But a future refactor that queued
+them would silently send someone's briefing to the wrong chat. I bound them
+explicitly.
+
+224 tests pass, five runs in a row, including full Telegram conversations: tapping
+Undo, answering a "when?" question, receiving the briefing exactly once from
+two scheduler runs, and quiet hours holding back an alert that then appears in
+the briefing. Still unverified: a real round trip on my phone. That's next.
 
 ---
 
@@ -274,8 +388,11 @@ Not forgotten — parked, with the reason.
 
 - **Off-machine backups.** Encrypt and copy the nightly backup somewhere else.
   Today a disk failure loses both the data and its backups. Low effort, real gap.
-- **A "decisions removed" metric.** Needs the execution log tagged by outcome
-  (see the comments section). Waiting until there's real usage to measure.
+- **Repeating reminders.** "Every Monday" is detected and refused honestly for
+  now. Needs a recurrence rule that survives restarts and DST elsewhere.
+- **Conversation summaries.** The table exists, but nothing uses it yet. Each
+  message is handled on its own, which keeps prompts tiny and cheap. I'll add
+  context only once a real conversation needs it.
 - **Chief of Staff suggesting research.** The suggestion-not-action path from
   above. Wants both agents to exist first.
 - **Calendar read access.** Conflict detection and "free time for study" would be

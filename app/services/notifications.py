@@ -153,7 +153,9 @@ def render_reminder(message: str, remind_at: datetime, now: datetime) -> str:
     return text
 
 
-async def dispatch_due_reminders(send_text: TextSender, settings: Settings) -> dict[str, int]:
+async def dispatch_due_reminders(send_text: TextSender, settings: Settings,
+                                 on_sent: Callable[[int, int], None] | None = None) -> dict[str, int]:
+    """Send due reminders. `on_sent(user_id, reminder_id)` fires once per new delivery."""
     recover_stale_reminders(settings)
     now = utcnow()
     with session_scope() as s:
@@ -180,13 +182,18 @@ async def dispatch_due_reminders(send_text: TextSender, settings: Settings) -> d
         target = chat_id or tg_user_id
         html = render_reminder(message, remind_at, now)
         outcome = await deliver(f"reminder:{rid}", "reminder",
-                                lambda: send_text(target, html), settings, user_id=user_id)
+                                lambda t=target, h=html: send_text(t, h), settings, user_id=user_id)
         with session_scope() as s:
             r = s.get(Reminder, rid)
             assert r is not None
             if outcome in (Outcome.SENT, Outcome.DUPLICATE):
                 r.status = ReminderStatus.SENT
                 r.sent_at = r.sent_at or utcnow()
+                if outcome == Outcome.SENT and on_sent is not None:
+                    try:
+                        on_sent(user_id, rid)
+                    except Exception:
+                        logger.exception("on_sent callback failed for reminder %s", rid)
             elif outcome == Outcome.GAVE_UP:
                 r.status = ReminderStatus.FAILED
             elif outcome == Outcome.RETRY:

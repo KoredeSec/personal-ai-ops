@@ -15,13 +15,27 @@ from app.services.users import get_or_create_user
 
 # Lists only what works. New commands are added here as they ship.
 HELP_TEXT = """<b>Personal AI Ops</b>
+Just write normally, e.g. "remind me to call mum tomorrow 6pm", "I need to renew my passport by 20 Nov", "follow up with Ade on friday", "what are my tasks", "prepare my priorities for tomorrow".
 
-/status – system health: database, AI, backups, jobs
-/ping – check the bot is responding
-/aitest – verify the Gemini connection (uses 1 AI request)
-/help – this message
+<b>Plan</b>
+/today – daily briefing · /tomorrow – plan for tomorrow · /weekly – weekly review
 
-Times are shown in Africa/Lagos time (WAT)."""
+<b>Tasks & reminders</b>
+/tasks – open tasks · /addtask · /done 12
+/remind · /reminders
+
+<b>People</b>
+/followup – track someone to contact · /followups
+
+<b>Memory & data</b>
+/memory · /remember · /forget · /export
+
+<b>System</b>
+/settings – briefing time, quiet hours, work hours
+/status · /aitest · /cancel
+
+Every change comes with Undo/Edit. I never message anyone on your behalf.
+Times are Africa/Lagos (WAT)."""
 
 
 def _settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:
@@ -101,20 +115,21 @@ async def aitest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await reply_text(update, "I can't act on free-text messages yet. Send /help to see the commands I understand.")
-
-
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await reply_text(update, "I don't know that command. Send /help for the list.")
 
 
-BOT_COMMANDS = [
+BASIC_COMMANDS = [
     ("status", "System health"),
-    ("ping", "Check the bot is responding"),
     ("aitest", "Verify the Gemini connection"),
     ("help", "Show capabilities"),
 ]
+
+
+def bot_commands() -> list[tuple[str, str]]:
+    from app.bot.handlers.chief_of_staff import COMMANDS
+
+    return [(n, d) for n, d, _ in COMMANDS] + BASIC_COMMANDS
 
 
 def register(application: Application) -> None:
@@ -128,4 +143,6 @@ def register(application: Application) -> None:
 def register_fallbacks(application: Application) -> None:
     """Must be registered last: within a group, the first matching handler wins."""
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text))
+    from app.bot.handlers.chief_of_staff import handle_text
+
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

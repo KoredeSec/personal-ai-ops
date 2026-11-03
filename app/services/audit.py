@@ -26,6 +26,7 @@ class AuditEvent:
     EXTERNAL_ACTION_APPROVED = "external_action_approved"
     PROMPT_INJECTION_SUSPECTED = "prompt_injection_suspected"
     URL_REJECTED = "url_rejected"
+    JOB_FAILED = "job_failed"
 
 
 def audit(event_type: str, actor_telegram_id: int | None = None, **details: Any) -> None:

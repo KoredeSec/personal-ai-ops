@@ -124,7 +124,7 @@ async def test_help_ping_status(bot):
     help_text, ping_text, status_text = fake.sent_texts()
     assert "/status" in help_text
     assert ping_text.startswith("pong")
-    assert "✅ OK – Database" in status_text and "0002_delivery_state" in status_text
+    assert "✅ OK – Database" in status_text and "0003_decision_events" in status_text
     assert "Milestone" not in help_text
     assert "AIza" not in status_text and "TEST_TOKEN" not in status_text  # no secrets
 
@@ -140,7 +140,8 @@ async def test_unknown_command_and_plain_text_fallbacks(bot):
     await app.process_update(make_update(app, "/nonsense"))
     await app.process_update(make_update(app, "remind me tomorrow"))
     unknown, text = fake.sent_texts()
-    assert "don't know that command" in unknown and "free-text" in text
+    assert "don't know that command" in unknown
+    assert text == "What should I remind you about?"  # routed to the agent, which asks
     assert "Milestone" not in unknown + text
 
 
@@ -187,7 +188,7 @@ async def test_post_init_sets_commands_and_registers_jobs(bot):
         await app.post_init(app)
         assert any(e == "setMyCommands" for e, _ in fake.calls)
         names = sorted(j.name for j in app.job_queue.jobs())
-        assert names == ["backup", "heartbeat", "housekeeping", "reminder_dispatch"]
+        assert names == ["backup", "heartbeat", "housekeeping", "planner", "reminder_dispatch"]
     finally:
         await app.job_queue.stop()
 
