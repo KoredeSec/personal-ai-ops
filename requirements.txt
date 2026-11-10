@@ -1,5 +1,5 @@
 # Runtime dependencies (pinned for reproducible builds).
-google-genai==2.34.0                     # official Gemini SDK (required by spec)
+google-genai==3.0.0                     # official Gemini SDK (required by spec)
 python-telegram-bot[job-queue]==22.8     # Telegram API + JobQueue (pulls APScheduler)
 SQLAlchemy==2.1.6                       # ORM; SQLite now, PostgreSQL later via DATABASE_URL
 alembic==1.20.1                          # schema migrations
